@@ -1,5 +1,6 @@
 .firecrawl/
 .cpcache/
+.jolt/
 .nrepl-port
 .env
 .env.*

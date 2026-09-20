@@ -23,7 +23,8 @@ jobs:
         with:
           cli: latest
       - run: clojure -P
-      - run: clojure -M:test
+      - name: Run JVM and fuzz tests
+        run: clojure -M:test
 
   jolt:
     name: Jolt tests

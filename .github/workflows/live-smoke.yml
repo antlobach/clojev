@@ -1,0 +1,51 @@
+name: Live API smoke
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  jvm-live:
+    name: JVM live API
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+      - uses: DeLaGuardo/setup-clojure@13.4
+        with:
+          cli: latest
+      - name: Call System One from the JVM
+        env:
+          TYPESAFE_API_KEY: ${{ secrets.TYPESAFE_API_KEY }}
+        run: >-
+          clojure -M -e
+          "(require '[clojev.core :as clojev] '[clojev.http.jvm :as http])
+          (let [result (clojev/system-one
+          (http/client {})
+          {:statement \"Water freezes at zero degrees Celsius.\"}
+          {:correct (clojev/noul \"Is the statement factually correct?\")})]
+          (prn (select-keys result [:model :answers :usage])))"
+
+  jolt-live:
+    name: Jolt live API
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Jolt
+        run: curl -sL https://raw.githubusercontent.com/jolt-lang/jolt/main/install | bash
+      - name: Call System One from Jolt
+        env:
+          TYPESAFE_API_KEY: ${{ secrets.TYPESAFE_API_KEY }}
+        run: >-
+          ~/.local/bin/jolt -A:jolt -e
+          "(require '[clojev.core :as clojev] '[clojev.http.jolt :as http])
+          (let [result (clojev/system-one
+          (http/client {})
+          {:statement \"Water freezes at zero degrees Celsius.\"}
+          {:correct (clojev/noul \"Is the statement factually correct?\")})]
+          (prn (select-keys result [:model :answers :usage])))"

@@ -391,7 +391,18 @@ Run the Jolt test with Jolt 0.8.9 or later:
 jolt -A:jolt -Sdeps '{:paths ["src" "test"]}' -M -m clojev.jolt-test
 ```
 
-The JVM suite uses a local HTTP server. The tests do not require a TypeSafe API key.
+The JVM suite uses a local HTTP server. It also runs six deterministic property-based fuzz tests with 1,000 generated cases per property. The tests cover constructor boundaries, request and response round trips, protected header casing, retry limits, and malformed response probabilities. These tests do not require a TypeSafe API key.
+
+### Run a live API smoke test
+
+The manual GitHub Actions workflow tests the real API from the JVM and Jolt. Store the API key as an encrypted repository secret, and then start the workflow:
+
+```sh
+gh secret set TYPESAFE_API_KEY
+gh workflow run live-smoke.yml
+```
+
+The normal CI workflow does not use the live API or require an API key.
 
 ## License
 
