@@ -4,7 +4,8 @@
 (defprotocol Transport
   "A synchronous HTTP transport.
 
-  Requests have :method, :url, :headers, :body, and :timeout-ms.
+  Requests have :method, :url, :headers, and :timeout-ms. POST requests also
+  have a string :body.
   Responses must have integer :status, string-to-string :headers, and a string
   :body. A transport may include normalized :retry-after-ms. Connection and
   timeout failures should throw ExceptionInfo with :type

@@ -1,9 +1,10 @@
 (ns clojev.jolt-test
-  (:require [clojure.test :refer [deftest is run-tests]]
+  (:require [clojure.data.json :as json]
+            [clojure.test :refer [deftest is run-tests]]
             [clojev.core :as clojev]
             [clojev.http.jolt :as http]))
 
-(deftest evaluates-through-jolt-backend
+(deftest evaluates-all-answer-types-through-jolt-backend
   (let [seen (promise)
         client (http/client
                  {:api-key "test-key"
@@ -13,13 +14,104 @@
                     {:status 200
                      :headers {"content-type" "application/json"}
                      :body
-                     "{\"model\":\"jev-1.13.0\",\"answers\":{\"ok\":{\"type\":\"noul\",\"noul\":0.97}},\"usage\":{\"input_tokens\":3,\"output_tokens\":1}}"})})
+                     "{\"model\":\"jev-1.13.0\",\"answers\":{\"ok\":{\"type\":\"noul\",\"noul\":0.97,\"ignored\":true},\"route\":{\"type\":\"choice\",\"choice\":\"fast\",\"probabilities\":{\"fast\":0.8,\"safe\":0.2},\"confidence\":0.7},\"rating\":{\"type\":\"score\",\"score\":1.25,\"legend\":{\"0\":\"low\",\"1\":{\"label\":\"medium\"},\"2\":[\"high\"]},\"probabilities\":{\"0\":0.1,\"1\":0.55,\"2\":0.35},\"confidence\":0.9}},\"usage\":{\"input_tokens\":3,\"output_tokens\":1},\"ignored\":true}"})})
+        questions
+        {:ok (clojev/noul "OK?")
+         :route (clojev/choice
+                  {"prompt" "Route?"}
+                  {"fast" nil "safe" ["safer"]})
+         "rating" (clojev/score
+                    ["Rating?"]
+                    ["low" {"label" "medium"} ["high"]])}
         result (clojev/system-one
-                 client "state" {:ok (clojev/noul "OK?")})]
-    (is (= :post (:method @seen)))
-    (is (= 0.97 (get-in result [:answers :ok :noul])))
-    (is (= {:input-tokens 3 :output-tokens 1}
-           (:usage result)))))
+                 client {"state" ["portable"]} questions)
+        request @seen
+        body (json/read-str (:body request))]
+    (is (= :post (:method request)))
+    (is (= "https://api.typesafe.ai/v1/systemone" (:url request)))
+    (is (= "Bearer test-key"
+           (get-in request [:headers "Authorization"])))
+    (is (= {"state" {"state" ["portable"]}
+            "model" "jev-latest"
+            "questions"
+            {"ok" {"type" "noul" "instructions" "OK?"}
+             "route" {"type" "choice"
+                      "instructions" {"prompt" "Route?"}
+                      "criteria" {"fast" nil "safe" ["safer"]}}
+             "rating" {"type" "score"
+                       "instructions" ["Rating?"]
+                       "criteria"
+                       ["low" {"label" "medium"} ["high"]]}}}
+           body))
+    (is (= {:model "jev-1.13.0"
+            :answers
+            {:ok {:type :noul :noul 0.97}
+             :route {:type :choice
+                     :choice "fast"
+                     :probabilities {"fast" 0.8 "safe" 0.2}
+                     :confidence 0.7}
+             "rating" {:type :score
+                       :score 1.25
+                       :legend {"0" "low"
+                                "1" {"label" "medium"}
+                                "2" ["high"]}
+                       :probabilities {"0" 0.1 "1" 0.55 "2" 0.35}
+                       :confidence 0.9}}
+            :usage {:input-tokens 3 :output-tokens 1}}
+           result))))
+
+(deftest exposes-retry-and-structured-failure-through-jolt-backend
+  (let [attempts (atom 0)
+        client (http/client
+                 {:api-key "test-key"
+                  :request-fn
+                  (fn [_]
+                    (if (= 1 (swap! attempts inc))
+                      {:status 503
+                       :headers {}
+                       :body "busy"}
+                      {:status 422
+                       :headers {"x-typesafe-request-id" "req_jolt"}
+                       :body "{\"detail\":\"invalid\"}"}))
+                  :retry {:max-retries 1
+                          :backoff-initial-ms 0
+                          :backoff-max-ms 0
+                          :backoff-jitter 0
+                          :budget-ms nil}})
+        error (try
+                (clojev/system-one
+                  client "state" {:ok (clojev/noul "OK?")})
+                (catch clojure.lang.ExceptionInfo error error))
+        data (ex-data error)]
+    (is (= 2 @attempts))
+    (is (= :clojev/unprocessable-entity (:type data)))
+    (is (= 422 (:status data)))
+    (is (= {"detail" "invalid"} (:body data)))
+    (is (= "req_jolt" (:request-id data)))
+    (is (= "https://api.typesafe.ai/v1/systemone"
+           (:endpoint data)))))
+
+(deftest lists-models-through-jolt-backend
+  (let [seen (promise)
+        client (http/client
+                 {:api-key "test-key"
+                  :request-fn
+                  (fn [request]
+                    (deliver seen request)
+                    {:status 200
+                     :headers {"content-type" "application/json"}
+                     :body
+                     "{\"models\":[{\"name\":\"jev-latest\",\"description\":\"Latest stable model\",\"release_date\":\"2026-09-10T18:38:01Z\"}]}"})})
+        result (clojev/list-models client)]
+    (is (= :get (:method @seen)))
+    (is (= "https://api.typesafe.ai/v1/models" (:url @seen)))
+    (is (= "Bearer test-key"
+           (get-in @seen [:headers "Authorization"])))
+    (is (= {:models
+            [{:name "jev-latest"
+              :description "Latest stable model"
+              :release-date "2026-09-10T18:38:01Z"}]}
+           result))))
 
 (defn -main [& _]
   (let [{:keys [fail error]} (run-tests 'clojev.jolt-test)]

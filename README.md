@@ -13,11 +13,12 @@ CloJev is an independent Clojure SDK for the TypeSafe System One API.
 
 > **Unofficial project:** TypeSafe does not develop, sponsor, endorse, or support CloJev. This project uses the names TypeSafe, Jev, and System One only to identify the compatible API.
 
-CloJev sends state and typed questions to `POST /v1/systemone`. It returns Clojure maps with validated answers.
+CloJev sends state and typed questions to `POST /v1/systemone`. It also lists available models through `GET /v1/models`. It returns validated Clojure data.
 
 CloJev includes these features:
 
 - Noul, Choice, and Score question constructors
+- Authenticated model discovery
 - Keyword or string question identifiers
 - Response validation
 - Exponential retry delays with jitter
@@ -136,6 +137,25 @@ The result has this shape:
 
 CloJev preserves each question identifier. A keyword identifier produces a keyword answer key. A string identifier produces a string answer key.
 
+## List available models
+
+Use the same client to list the model names available to the authenticated account:
+
+```clojure
+(clojev/list-models client)
+```
+
+The result has this shape:
+
+```clojure
+{:models
+ [{:name "jev-latest"
+   :description "The latest iteration of TypeSafe's System One Model: Jev"
+   :release-date "2026-09-10T18:38:01.391457+00:00"}]}
+```
+
+`list-models` accepts per-call `:timeout-ms`, `:retry`, and `:extra-headers` options.
+
 ## Structured state and instructions
 
 State can be a string, map, or sequential collection.
@@ -215,6 +235,8 @@ The function receives this map:
  :body "{...}"
  :timeout-ms 10000}
 ```
+
+Model listing uses `:method :get`, changes the URL to `/v1/models`, and omits `:body`.
 
 The function must return this map:
 
@@ -401,6 +423,17 @@ jolt -A:jolt -Sdeps '{:paths ["src" "test"]}' -M -m clojev.jolt-test
 ```
 
 The JVM suite uses a local HTTP server. It also runs six deterministic property-based fuzz tests with 1,000 generated cases per property. The tests cover constructor boundaries, request and response round trips, protected header casing, retry limits, and malformed response probabilities. These tests do not require a TypeSafe API key.
+
+### Validate the Allium contract
+
+The behavioral contract is in [`spec/typesafe-api.allium`](spec/typesafe-api.allium).
+With the [Allium CLI](https://github.com/juxt/allium-tools) installed, validate
+its structure and semantic analysis:
+
+```sh
+allium check spec/typesafe-api.allium
+allium analyse spec/typesafe-api.allium
+```
 
 ### Run a live API smoke test
 

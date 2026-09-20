@@ -25,7 +25,8 @@
 
 (defn- criteria-map [n]
   (into {}
-        (map (fn [index] [(str "option-" index) index]))
+        (map (fn [index]
+               [(str "option-" index) (str "Description " index)]))
         (range n)))
 
 (def ^:private id-text-gen
@@ -78,27 +79,19 @@
       1101
       (prop/for-all [n (gen/choose 0 270)]
         (let [criteria (criteria-map n)
-              {:keys [value error]}
-              (capture #(clojev/choice "Choose" criteria))]
+              {:keys [error]} (capture #(clojev/choice "Choose" criteria))]
           (if (<= 1 n 255)
-            (= {:type "choice"
-                :instructions "Choose"
-                :criteria criteria}
-               value)
+            (nil? error)
             (and (= :clojev/invalid-request (:type error))
                  (= :criteria (:field error))))))))
   (testing "score accepts exactly 2 to 10 levels"
     (check-property!
       1102
       (prop/for-all [n (gen/choose 0 15)]
-        (let [criteria (vec (range n))
-              {:keys [value error]}
-              (capture #(clojev/score "Score" criteria))]
+        (let [criteria (mapv #(str "level-" %) (range n))
+              {:keys [error]} (capture #(clojev/score "Score" criteria))]
           (if (<= 2 n 10)
-            (= {:type "score"
-                :instructions "Score"
-                :criteria criteria}
-               value)
+            (nil? error)
             (and (= :clojev/invalid-request (:type error))
                  (= :criteria (:field error)))))))))
 

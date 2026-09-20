@@ -1,0 +1,299 @@
+-- allium: 3
+-- typesafe-api.allium
+--
+-- Scope: CloJev's observable TypeSafe HTTP behavior.
+-- Includes: POST /v1/systemone, GET /v1/models, request validation,
+--   response normalization, authentication and failure outcomes, timeouts,
+--   retries, and JVM/Jolt boundary parity.
+-- Excludes:
+--   - Python and JavaScript SDK conveniences such as abort signals,
+--     response_model, logger configuration, and client-specific extra_body.
+--   - Model inference quality, model training, pricing, and rate-limit quotas.
+--   - HTTP backend implementation details that do not change caller-visible
+--     requests, results, delays, or failures.
+
+------------------------------------------------------------
+-- Value Types
+------------------------------------------------------------
+
+entity SdkCaller {
+    authenticated: Boolean
+}
+
+-- An opaque JSON-compatible value whose top-level shape is a string, object,
+-- or array. Object and array members retain their JSON-compatible structure.
+value StructuredContent {
+    shape: text | object | array
+}
+
+value QuestionIdentifier {
+    value: String
+    representation: string | keyword
+}
+
+value NoulCriteria {
+    true_description: StructuredContent?
+    false_description: StructuredContent?
+}
+
+value ChoiceOption {
+    name: String
+    description: StructuredContent?
+}
+
+value Question {
+    id: QuestionIdentifier
+    type: PrimitiveType
+    instructions: StructuredContent
+    noul_criteria: NoulCriteria?
+    choice_options: Set<ChoiceOption>?
+    score_levels: List<StructuredContent>?
+}
+
+value RetryPolicy {
+    max_retries: Integer
+    backoff_initial: Duration
+    backoff_max: Duration
+    backoff_jitter: Decimal
+    statuses: Set<Integer>
+    respect_retry_after: Boolean
+    budget: Duration?
+}
+
+value ClientConfiguration {
+    api_key: String?
+    model: String?
+    attempt_timeout: Duration?
+    retry: RetryPolicy?
+}
+
+value SystemOneOptions {
+    model: String?
+    attempt_timeout: Duration?
+    retry: RetryPolicy?
+}
+
+value CallOptions {
+    attempt_timeout: Duration?
+    retry: RetryPolicy?
+}
+
+value Probability {
+    key: String
+    probability: Decimal
+}
+
+value LegendEntry {
+    level: String
+    description: StructuredContent
+}
+
+value Answer {
+    question_id: QuestionIdentifier
+    type: PrimitiveType
+    noul: Decimal?
+    choice: String?
+    probabilities: Set<Probability>?
+    confidence: Decimal?
+    score: Decimal?
+    legend: Set<LegendEntry>?
+}
+
+value Usage {
+    input_tokens: Integer?
+    output_tokens: Integer?
+}
+
+value SystemOneResponse {
+    model: String
+    answers: Set<Answer>
+    usage: Usage
+}
+
+value ModelCard {
+    name: String
+    description: String
+    release_date: String
+}
+
+value ModelList {
+    models: List<ModelCard>
+}
+
+value Header {
+    name: String
+    value: String
+}
+
+value Failure {
+    kind: FailureKind
+    status: Integer?
+    body: StructuredContent?
+    headers: Set<Header>?
+    endpoint: String?
+    request_id: String?
+    retry_after: Duration?
+    field_path: String?
+    attempt_timeout: Duration?
+}
+
+------------------------------------------------------------
+-- Contracts
+------------------------------------------------------------
+
+contract TypeSafeHttpApi {
+    system_one: (client: ClientConfiguration, state: StructuredContent, questions: Set<Question>, options: SystemOneOptions?) -> SystemOneResponse
+    list_models: (client: ClientConfiguration, options: CallOptions?) -> ModelList
+
+    @invariant EffectiveClientConfiguration
+        -- Explicit client configuration takes precedence over environment
+        -- configuration. An absent model resolves to the configured client
+        -- model and then to "jev-latest". An absent timeout resolves to
+        -- 10 seconds per HTTP attempt. A missing, blank, or whitespace-only
+        -- effective API key is rejected locally as invalid_request; every
+        -- dispatched request authenticates with that key as a Bearer token.
+
+    @invariant QuestionSchemas
+        -- Questions are a non-empty collection. Each id is a non-blank caller
+        -- string or keyword, is encoded as a JSON object key, and remains the
+        -- same string or keyword in the returned answer map. Two ids that
+        -- encode to the same JSON key are rejected locally.
+        --
+        -- Instructions are StructuredContent. A noul has optional criteria;
+        -- when present, criteria may independently describe true and false.
+        -- A choice has 1 through 255 uniquely named options and each option's
+        -- description may be null. A score has 2 through 10 levels; levels
+        -- retain caller order and each level may be structured content.
+        -- Fields belonging to another primitive variant are absent.
+
+    @invariant SystemOneRequest
+        -- system_one accepts state only as a string, object, or array. It sends
+        -- POST /v1/systemone with state, the non-empty question map, and the
+        -- effective model. A non-blank per-call model overrides the client's
+        -- model. Invalid state, questions, question variants, model, timeout,
+        -- retry policy, or non-JSON-compatible content fails locally as
+        -- invalid_request before an HTTP attempt.
+
+    @invariant SystemOneAnswers
+        -- A valid success contains exactly one answer for every submitted id,
+        -- no missing or additional ids, and each answer type matches its
+        -- question type. The answer map has no iteration-order guarantee.
+        --
+        -- A noul contains only its type and a value from 0 through 1. A choice
+        -- contains the highest-probability submitted option, one probability
+        -- from 0 through 1 for every option, probabilities summing to 1, and
+        -- confidence from 0 through 1. A score contains the probability-
+        -- weighted value across its ordered zero-based levels, a legend from
+        -- each decimal level key to the submitted structured level, one
+        -- probability from 0 through 1 for every level with total 1, and
+        -- confidence from 0 through 1.
+
+    @invariant SystemOneNormalization
+        -- Successful wire data is returned as Clojure data: answer type strings
+        -- become :noul, :choice, or :score; caller question-id representation
+        -- is restored; input_tokens and output_tokens become input-tokens and
+        -- output-tokens; and unrecognized response fields are not returned.
+        -- The response model is the versioned model id reported by TypeSafe.
+        -- Reported usage token counts are non-negative integers; omitted or
+        -- null counts are normalized to nil.
+
+    @invariant ModelDiscovery
+        -- list_models sends GET /v1/models with the same authentication,
+        -- timeout, and retry behavior as system_one. A valid success is a
+        -- models list in service order. Every entry has a string name accepted
+        -- by the model field, a string description, and a string release date;
+        -- release_date is normalized to release-date in Clojure data.
+
+    @invariant SuccessfulResponseValidation
+        -- Every 2xx response must be valid JSON and satisfy the selected
+        -- endpoint's complete success shape. Missing required data, wrong types,
+        -- mismatched question ids or primitive types, out-of-range values, or
+        -- inconsistent choice/score data raises response_validation_error with
+        -- status, raw body, headers, endpoint, offending field_path, and the
+        -- x-typesafe-request-id value when present. This failure is not retried.
+
+    @invariant HttpFailures
+        -- A non-2xx response raises a structured API failure after applicable
+        -- retries. Status 400 is bad_request; 401 is authentication_error; 403
+        -- is permission_denied; 404 is not_found; 422 is
+        -- unprocessable_entity; 429 is rate_limit_error; every 5xx, including
+        -- 529 Overloaded, is internal_server_error; every other status is
+        -- api_error. The failure carries status, parsed JSON body or plain text
+        -- body, headers, endpoint, x-typesafe-request-id when present, and the
+        -- parsed retry delay when present. Empty error bodies are absent.
+
+    @invariant TimeoutAndTransportFailures
+        -- Timeout is positive and applies independently to each attempt. An
+        -- attempt that exceeds it raises timeout after retries are exhausted.
+        -- Failure to connect, read a response, or receive a valid transport
+        -- response raises connection_error after retries are exhausted. These
+        -- failures identify the endpoint and configured attempt timeout.
+
+    @invariant RetryPolicy
+        -- The default policy permits 2 retries after the initial attempt, uses
+        -- an initial 500 millisecond exponential delay capped at 5 seconds,
+        -- subtracts random jitter of at most 25 percent, retries statuses 408,
+        -- 429, and 500 through 599, respects retry-after-ms and numeric
+        -- Retry-After seconds, retries timeout and connection failures, and has
+        -- a 30 second total budget including attempts and delays.
+        --
+        -- max_retries is non-negative; both backoff durations are non-negative;
+        -- backoff_jitter is from 0 through 1; statuses contains integers; and a
+        -- present budget is positive. Per-call fields override corresponding
+        -- client policy fields. max_retries 0 disables retries; an absent budget
+        -- removes the total budget. A respected server delay replaces the
+        -- exponential delay. No retry starts when its delay would reach or
+        -- exceed the budget, and an attempt timeout is shortened to the
+        -- remaining budget.
+
+    @invariant RetryExhaustion
+        -- A non-retryable outcome, exhausted retry count, or exhausted retry
+        -- budget raises the last observed API, timeout, or connection failure.
+        -- The SDK never converts exhaustion into a successful or empty result.
+}
+
+------------------------------------------------------------
+-- Enumerations
+------------------------------------------------------------
+
+enum PrimitiveType { noul | choice | score }
+
+enum FailureKind {
+    invalid_request
+    bad_request
+    authentication_error
+    permission_denied
+    not_found
+    unprocessable_entity
+    rate_limit_error
+    internal_server_error
+    api_error
+    timeout
+    connection_error
+    response_validation_error
+}
+
+------------------------------------------------------------
+-- Surfaces
+------------------------------------------------------------
+
+actor AuthenticatedSdkCaller {
+    identified_by: SdkCaller where this.authenticated = true
+}
+
+surface CloJevTypeSafeBoundary {
+    facing caller: AuthenticatedSdkCaller
+    exposes:
+        SystemOneResponse
+        ModelList
+        Failure
+
+    contracts:
+        fulfils TypeSafeHttpApi
+
+    @guarantee JvmJoltParity
+        -- For the same client configuration, call arguments, TypeSafe response
+        -- sequence, clock, and randomness, the JVM and Jolt transports issue
+        -- equivalent endpoint requests and expose the same normalized result,
+        -- retry timing decisions, or structured failure to the caller.
+}

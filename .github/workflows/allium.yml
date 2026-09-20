@@ -1,0 +1,23 @@
+name: Allium specification
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  specification:
+    name: Contract checks
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Install Allium CLI
+        run: cargo install allium-cli --locked
+      - name: Validate specification
+        run: allium check spec/typesafe-api.allium
+      - name: Analyze specification
+        run: allium analyse spec/typesafe-api.allium

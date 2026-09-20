@@ -37,19 +37,19 @@
 (defrecord JoltTransport []
   transport/Transport
   (-send! [_ {:keys [method url headers body timeout-ms]}]
-    (when-not (= :post method)
-      (throw (ex-info "Jolt transport supports only :post"
+    (when-not (contains? #{:get :post} method)
+      (throw (ex-info "Jolt transport supports only :get and :post"
                       {:type :clojev/invalid-request :field :method})))
     (try
-      (let [response (http/request
-                       {:method method
-                        :url url
-                        :headers headers
-                        :body body
-                        :as :text
-                        :throw-exceptions false
-                        :conn-timeout timeout-ms
-                        :socket-timeout timeout-ms})]
+      (let [request (cond-> {:method method
+                             :url url
+                             :headers headers
+                             :as :text
+                             :throw-exceptions false
+                             :conn-timeout timeout-ms
+                             :socket-timeout timeout-ms}
+                      (some? body) (assoc :body body))
+            response (http/request request)]
         {:status (:status response)
          :headers (normalize-headers (:headers response))
          :body (str (:body response))})

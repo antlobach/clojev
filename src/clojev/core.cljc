@@ -148,39 +148,106 @@
        :headers headers
        :retry (retry-policy (:retry opts))})))
 
-(defn- required [value field]
-  (when (nil? value)
-    (fail! (str field " is required") {:field field}))
-  value)
+(defn- json-compatible? [value]
+  (cond
+    (nil? value) true
+    (string? value) true
+    (boolean? value) true
+    (number? value) (< ##-Inf (double value) ##Inf)
+    (map? value) (let [wire-keys
+                       (map (fn [key]
+                              (cond
+                                (string? key) key
+                                (keyword? key) (name key)
+                                :else nil))
+                            (keys value))]
+                   (and (every? some? wire-keys)
+                        (= (count wire-keys) (count (set wire-keys)))
+                        (every? json-compatible? (vals value))))
+    (sequential? value) (every? json-compatible? value)
+    :else false))
+
+(defn- structured-content? [value]
+  (and (or (string? value) (map? value) (sequential? value))
+       (json-compatible? value)))
+
+(defn- question-fail! [message field question-id]
+  (fail! message
+         (cond-> {:field field}
+           (some? question-id) (assoc :question-id question-id))))
+
+(defn- validate-instructions! [instructions question-id]
+  (when-not (structured-content? instructions)
+    (question-fail!
+      "question instructions must be a JSON-compatible string, map, or sequential collection"
+      :instructions
+      question-id)))
+
+(defn- field-name [field]
+  (cond
+    (string? field) field
+    (keyword? field) (name field)
+    :else nil))
+
+(defn- distinct-known-fields? [value allowed]
+  (let [names (map field-name (keys value))]
+    (and (every? some? names)
+         (= (count names) (count (set names)))
+         (every? allowed names))))
+
+(defn- valid-noul-criteria? [criteria]
+  (and (map? criteria)
+       (distinct-known-fields? criteria #{"true" "false"})
+       (every? structured-content? (vals criteria))))
+
+(defn- valid-choice-criteria? [criteria]
+  (and (map? criteria)
+       (<= 1 (count criteria) 255)
+       (every? string? (keys criteria))
+       (every? #(or (nil? %) (structured-content? %)) (vals criteria))))
+
+(defn- valid-score-criteria? [criteria]
+  (and (sequential? criteria)
+       (<= 2 (count criteria) 10)
+       (every? structured-content? criteria)))
 
 (defn noul
   "Builds a yes/no question. Criteria may describe :true and :false outcomes."
   ([instructions] (noul instructions nil))
   ([instructions criteria]
-   (when-not (or (nil? criteria) (map? criteria))
-     (fail! "noul criteria must be a map" {:field :criteria}))
-   (cond-> {:type "noul"
-            :instructions (required instructions :instructions)}
+   (validate-instructions! instructions nil)
+   (when-not (or (nil? criteria) (valid-noul-criteria? criteria))
+     (question-fail!
+       "noul criteria must contain only structured true and false descriptions"
+       :criteria
+       nil))
+   (cond-> {:type "noul" :instructions instructions}
      (some? criteria) (assoc :criteria criteria))))
 
 (defn choice
   "Builds a choice question with 1 to 255 named options."
   [instructions criteria]
-  (when-not (and (map? criteria) (<= 1 (count criteria) 255))
-    (fail! "choice criteria must contain 1 to 255 options"
-           {:field :criteria}))
+  (validate-instructions! instructions nil)
+  (when-not (valid-choice-criteria? criteria)
+    (question-fail!
+      "choice criteria must contain 1 to 255 string options with structured descriptions"
+      :criteria
+      nil))
   {:type "choice"
-   :instructions (required instructions :instructions)
+   :instructions instructions
    :criteria criteria})
 
 (defn score
   "Builds a score question with 2 to 10 ordered levels."
   [instructions criteria]
-  (when-not (and (sequential? criteria) (<= 2 (count criteria) 10))
-    (fail! "score criteria must contain 2 to 10 levels"
-           {:field :criteria}))
+  (validate-instructions! instructions nil)
+  (when-not (valid-score-criteria? criteria)
+    (question-fail!
+      "score criteria must contain 2 to 10 structured levels"
+      :criteria
+      nil))
   {:type "score"
-   :instructions (required instructions :instructions)
+   :instructions instructions
    :criteria (vec criteria)})
 
 (defn- map-field [m field]
@@ -207,37 +274,59 @@
     (fail! "each question must be a map"
            {:field :questions :question-id id}))
   (let [type (map-field question :type)
-        criteria (map-field question :criteria)]
-    (when-not (contains? {"noul" true "choice" true "score" true} type)
-      (fail! "question type must be noul, choice, or score"
-             {:field :type :question-id id}))
-    (when-not (and (contains-field? question :instructions)
-                   (some? (map-field question :instructions)))
-      (fail! "question instructions are required"
-             {:field :instructions :question-id id}))
+        criteria (map-field question :criteria)
+        allowed-fields (case type
+                         "noul" #{"type" "instructions" "criteria"}
+                         "choice" #{"type" "instructions" "criteria"}
+                         "score" #{"type" "instructions" "criteria"}
+                         nil)]
+    (when-not allowed-fields
+      (question-fail!
+        "question type must be noul, choice, or score"
+        :type
+        id))
+    (when-not (distinct-known-fields? question allowed-fields)
+      (question-fail!
+        "question contains duplicate or unsupported fields"
+        :questions
+        id))
+    (when-not (contains-field? question :instructions)
+      (question-fail! "question instructions are required" :instructions id))
+    (validate-instructions! (map-field question :instructions) id)
     (case type
       "noul"
-      (when (and (contains-field? question :criteria)
-                 (not (map? criteria)))
-        (fail! "noul criteria must be a map"
-               {:field :criteria :question-id id}))
+      (do
+        (when (and (contains-field? question :criteria)
+                   (not (valid-noul-criteria? criteria)))
+          (question-fail!
+            "noul criteria must contain only structured true and false descriptions"
+            :criteria
+            id))
+        {:type type})
 
       "choice"
-      (when-not (and (map? criteria) (<= 1 (count criteria) 255))
-        (fail! "choice criteria must contain 1 to 255 options"
-               {:field :criteria :question-id id}))
+      (do
+        (when-not (valid-choice-criteria? criteria)
+          (question-fail!
+            "choice criteria must contain 1 to 255 string options with structured descriptions"
+            :criteria
+            id))
+        {:type type :options (set (keys criteria))})
 
       "score"
-      (when-not (and (sequential? criteria) (<= 2 (count criteria) 10))
-        (fail! "score criteria must contain 2 to 10 levels"
-               {:field :criteria :question-id id})))
-    type))
+      (do
+        (when-not (valid-score-criteria? criteria)
+          (question-fail!
+            "score criteria must contain 2 to 10 structured levels"
+            :criteria
+            id))
+        {:type type :levels (vec criteria)}))))
 
 (defn- prepare-questions [questions]
   (when-not (and (map? questions) (seq questions))
     (fail! ":questions must be a non-empty map" {:field :questions}))
   (reduce-kv
-    (fn [{:keys [wire id-by-wire types] :as prepared} id question]
+    (fn [{:keys [wire id-by-wire schemas] :as prepared} id question]
       (let [wire-id (question-id->wire id)]
         (when (contains? id-by-wire wire-id)
           (fail! "question ids must be unique after JSON encoding"
@@ -245,8 +334,8 @@
         (assoc prepared
                :wire (assoc wire wire-id question)
                :id-by-wire (assoc id-by-wire wire-id id)
-               :types (assoc types wire-id (validate-question id question)))))
-    {:wire {} :id-by-wire {} :types {}}
+               :schemas (assoc schemas wire-id (validate-question id question)))))
+    {:wire {} :id-by-wire {} :schemas {}}
     questions))
 
 (defn- in-unit-interval? [value]
@@ -257,6 +346,19 @@
        (seq value)
        (every? string? (keys value))
        (every? in-unit-interval? (vals value))))
+
+(defn- approximately= [left right]
+  (let [difference (- (double left) (double right))
+        magnitude (if (neg? difference) (- difference) difference)]
+    (<= magnitude 1.0e-6)))
+
+(defn- valid-distribution? [probabilities expected-keys]
+  (and (probability-map? probabilities)
+       (= expected-keys (set (keys probabilities)))
+       (approximately= 1.0 (reduce + 0.0 (vals probabilities)))))
+
+(defn- json-normalize [value]
+  (json/read-str (json/write-str value)))
 
 (defn- non-negative-integer? [value]
   (and (integer? value) (not (neg? value))))
@@ -278,11 +380,19 @@
       (response-failure! status body headers endpoint field-path))
     value))
 
+(defn- optional-response-field
+  [m key pred status body headers endpoint field-path]
+  (let [value (get m key)]
+    (when (and (some? value) (not (pred value)))
+      (response-failure! status body headers endpoint field-path))
+    value))
+
 (defn- normalize-answer
-  [answer expected-type status body headers endpoint path]
+  [answer schema status body headers endpoint path]
   (when-not (map? answer)
     (response-failure! status body headers endpoint path))
-  (let [type (required-response-field
+  (let [expected-type (:type schema)
+        type (required-response-field
                answer "type" string?
                status body headers endpoint (str path ".type"))]
     (when (not= expected-type type)
@@ -302,7 +412,13 @@
                             answer "probabilities" probability-map?
                             status body headers endpoint
                             (str path ".probabilities"))]
-        (when-not (contains? probabilities choice)
+        (when-not (valid-distribution? probabilities (:options schema))
+          (response-failure! status body headers endpoint
+                             (str path ".probabilities")))
+        (when-not (and (contains? (:options schema) choice)
+                       (approximately=
+                         (get probabilities choice)
+                         (apply max (vals probabilities))))
           (response-failure! status body headers endpoint
                              (str path ".choice")))
         {:type :choice
@@ -313,20 +429,47 @@
                        status body headers endpoint (str path ".confidence"))})
 
       "score"
-      {:type :score
-       :score (required-response-field
-                answer "score" number?
-                status body headers endpoint (str path ".score"))
-       :legend (required-response-field
-                 answer "legend" map?
-                 status body headers endpoint (str path ".legend"))
-       :probabilities (required-response-field
-                        answer "probabilities" probability-map?
-                        status body headers endpoint
-                        (str path ".probabilities"))
-       :confidence (required-response-field
-                     answer "confidence" in-unit-interval?
-                     status body headers endpoint (str path ".confidence"))})))
+      (let [levels (:levels schema)
+            level-keys (set (map str (range (count levels))))
+            expected-legend (into {}
+                                  (map-indexed
+                                    (fn [index level]
+                                      [(str index) (json-normalize level)]))
+                                  levels)
+            score (required-response-field
+                    answer "score" number?
+                    status body headers endpoint (str path ".score"))
+            legend (required-response-field
+                     answer "legend" map?
+                     status body headers endpoint (str path ".legend"))
+            probabilities (required-response-field
+                            answer "probabilities" probability-map?
+                            status body headers endpoint
+                            (str path ".probabilities"))]
+        (when-not (= expected-legend legend)
+          (response-failure! status body headers endpoint
+                             (str path ".legend")))
+        (when-not (valid-distribution? probabilities level-keys)
+          (response-failure! status body headers endpoint
+                             (str path ".probabilities")))
+        (let [weighted-score
+              (reduce +
+                      0.0
+                      (map-indexed
+                        (fn [index _]
+                          (* index (get probabilities (str index))))
+                        levels))]
+          (when-not (and (<= 0 score (dec (count levels)))
+                         (approximately= score weighted-score))
+            (response-failure! status body headers endpoint
+                               (str path ".score"))))
+        {:type :score
+         :score score
+         :legend legend
+         :probabilities probabilities
+         :confidence (required-response-field
+                       answer "confidence" in-unit-interval?
+                       status body headers endpoint (str path ".confidence"))}))))
 
 (defn- normalize-response [raw prepared status body headers endpoint]
   (when-not (map? raw)
@@ -337,29 +480,29 @@
                   raw "answers" map? status body headers endpoint "answers")
         usage (required-response-field
                 raw "usage" map? status body headers endpoint "usage")
-        expected-ids (set (keys (:types prepared)))]
+        expected-ids (set (keys (:schemas prepared)))]
     (when-not (= expected-ids (set (keys answers)))
       (response-failure! status body headers endpoint "answers"))
     {:model model
      :answers (reduce-kv
-                (fn [result wire-id expected-type]
+                (fn [result wire-id schema]
                   (assoc result
                          (get (:id-by-wire prepared) wire-id)
                          (normalize-answer
                            (get answers wire-id)
-                           expected-type
+                           schema
                            status
                            body
                            headers
                            endpoint
                            (str "answers." wire-id))))
                 {}
-                (:types prepared))
-     :usage {:input-tokens (required-response-field
+                (:schemas prepared))
+     :usage {:input-tokens (optional-response-field
                              usage "input_tokens" non-negative-integer?
                              status body headers endpoint
                              "usage.input_tokens")
-             :output-tokens (required-response-field
+             :output-tokens (optional-response-field
                               usage "output_tokens" non-negative-integer?
                               status body headers endpoint
                               "usage.output_tokens")}}))
@@ -440,12 +583,44 @@
                    :request-id (get headers "x-typesafe-request-id")
                    :retry-after-ms retry-after-ms})))
 
-(defn- parse-success [status body headers endpoint prepared]
-  (let [raw (try
-              (json/read-str body)
-              (catch Exception _
-                (response-failure! status body headers endpoint "$")))]
-    (normalize-response raw prepared status body headers endpoint)))
+(defn- parse-json-success [status body headers endpoint]
+  (try
+    (json/read-str body)
+    (catch Exception _
+      (response-failure! status body headers endpoint "$"))))
+
+(defn- parse-system-one-success
+  [prepared status body headers endpoint]
+  (normalize-response
+    (parse-json-success status body headers endpoint)
+    prepared status body headers endpoint))
+
+(defn- parse-models-success [status body headers endpoint]
+  (let [raw (parse-json-success status body headers endpoint)]
+    (when-not (map? raw)
+      (response-failure! status body headers endpoint "$"))
+    (let [models (required-response-field
+                   raw "models" vector?
+                   status body headers endpoint "models")]
+      {:models
+       (mapv
+         (fn [index model]
+           (let [path (str "models." index)]
+             (when-not (map? model)
+               (response-failure! status body headers endpoint path))
+             {:name (required-response-field
+                      model "name" string?
+                      status body headers endpoint (str path ".name"))
+              :description (required-response-field
+                             model "description" string?
+                             status body headers endpoint
+                             (str path ".description"))
+              :release-date (required-response-field
+                              model "release_date" string?
+                              status body headers endpoint
+                              (str path ".release_date"))}))
+         (range)
+         models)})))
 
 (defn- operation-timeout-ms [platform timeout-ms policy started-ms]
   (if-let [budget-ms (:budget-ms policy)]
@@ -478,17 +653,17 @@
   response)
 
 (defn- execute-request
-  [client endpoint body prepared timeout-ms headers policy]
+  [client endpoint method request-body timeout-ms headers policy parse-success]
   (let [platform (:platform client)
         started-ms (transport/now-ms platform)]
     (loop [attempt 0]
       (let [current-timeout (operation-timeout-ms
                               platform timeout-ms policy started-ms)
-            request {:method :post
-                     :url endpoint
-                     :headers headers
-                     :body body
-                     :timeout-ms current-timeout}
+            request (cond-> {:method method
+                             :url endpoint
+                             :headers headers
+                             :timeout-ms current-timeout}
+                      (some? request-body) (assoc :body request-body))
             outcome (try
                       {:response (validate-transport-response
                                    (transport/send! (:transport client) request)
@@ -508,7 +683,7 @@
                 (transport/sleep-ms! platform delay-ms)
                 (recur (inc attempt)))
               (if (<= 200 status 299)
-                (parse-success status body headers endpoint prepared)
+                (parse-success status body headers endpoint)
                 (api-error!
                   status body headers endpoint
                   (or (:retry-after-ms response)
@@ -528,6 +703,40 @@
 (defn- protected-header? [name]
   (contains? protected-header-names (str/lower-case name)))
 
+(defn- operation-config [client opts]
+  (when-not (map? opts)
+    (fail! "request options must be a map" {:field :options}))
+  (when-not (::client client)
+    (fail! "client must be created by clojev.core/client" {:field :client}))
+  (let [timeout-ms (get opts :timeout-ms (:timeout-ms client))
+        extra-headers (get opts :extra-headers {})
+        policy (retry-policy
+                 (if (or (nil? (:retry opts)) (map? (:retry opts)))
+                   (merge (:retry client) (:retry opts))
+                   (:retry opts)))]
+    (when-not (positive-integer? timeout-ms)
+      (fail! ":timeout-ms must be a positive integer"
+             {:field :timeout-ms}))
+    (when-not (map? extra-headers)
+      (fail! ":extra-headers must be a map" {:field :extra-headers}))
+    (let [custom-headers (merge (:headers client) extra-headers)]
+      (when-not (every? (fn [[name value]]
+                          (and (string? name) (string? value)))
+                        custom-headers)
+        (fail! "header names and values must be strings"
+               {:field :headers}))
+      {:timeout-ms timeout-ms
+       :policy policy
+       :headers
+       (merge
+         (into {}
+               (remove (fn [[name _]] (protected-header? name)))
+               custom-headers)
+         {"Authorization" (str "Bearer " (:api-key client))
+          "Accept" "application/json"
+          "Content-Type" "application/json"
+          "User-Agent" (str "clojev/" sdk-version)})})))
+
 (defn system-one
   "Evaluates state against named questions and returns typed answer maps.
 
@@ -538,49 +747,43 @@
   ([client state questions]
    (system-one client state questions {}))
   ([client state questions opts]
-   (when-not (map? opts)
-     (fail! "request options must be a map" {:field :options}))
-   (when-not (::client client)
-     (fail! "client must be created by clojev.core/client" {:field :client}))
-   (when-not (or (string? state) (map? state) (sequential? state))
-     (fail! ":state must be a string, map, or sequential collection"
-            {:field :state}))
-   (let [prepared (prepare-questions questions)
-         model (get opts :model (:model client))
-         timeout-ms (get opts :timeout-ms (:timeout-ms client))
-         extra-headers (get opts :extra-headers {})
-         policy (retry-policy (merge (:retry client) (:retry opts)))
-         endpoint (str (:base-url client) "/v1/systemone")]
-     (when-not (nonblank-string? model)
-       (fail! ":model must be a non-blank string" {:field :model}))
-     (when-not (positive-integer? timeout-ms)
-       (fail! ":timeout-ms must be a positive integer"
-              {:field :timeout-ms}))
-     (when-not (map? extra-headers)
-       (fail! ":extra-headers must be a map" {:field :extra-headers}))
-     (let [body (try
-                  (json/write-str
-                    {:state state
-                     :model model
-                     :questions (:wire prepared)})
-                  (catch Exception error
-                    (throw (ex-info "Request is not JSON-encodable"
-                                    {:type :clojev/invalid-request
-                                     :field :request}
-                                    error))))
-           custom-headers (merge (:headers client) extra-headers)
-           _ (when-not (every? (fn [[name value]]
-                                 (and (string? name) (string? value)))
-                               custom-headers)
-               (fail! "header names and values must be strings"
-                      {:field :headers}))
-           headers (merge
-                     (into {}
-                           (remove (fn [[name _]] (protected-header? name)))
-                           custom-headers)
-                     {"Authorization" (str "Bearer " (:api-key client))
-                      "Accept" "application/json"
-                      "Content-Type" "application/json"
-                      "User-Agent" (str "clojev/" sdk-version)})]
-       (execute-request
-         client endpoint body prepared timeout-ms headers policy)))))
+   (let [{:keys [timeout-ms headers policy]} (operation-config client opts)]
+     (when-not (structured-content? state)
+       (fail! ":state must be a JSON-compatible string, map, or sequential collection"
+              {:field :state}))
+     (let [prepared (prepare-questions questions)
+           model (get opts :model (:model client))
+           endpoint (str (:base-url client) "/v1/systemone")]
+       (when-not (nonblank-string? model)
+         (fail! ":model must be a non-blank string" {:field :model}))
+       (let [body (try
+                    (json/write-str
+                      {:state state
+                       :model model
+                       :questions (:wire prepared)})
+                    (catch Exception error
+                      (throw (ex-info "Request is not JSON-encodable"
+                                      {:type :clojev/invalid-request
+                                       :field :request}
+                                      error))))]
+         (execute-request
+           client endpoint :post body timeout-ms headers policy
+           (fn [status response-body response-headers response-endpoint]
+             (parse-system-one-success
+               prepared status response-body response-headers
+               response-endpoint))))))))
+
+(defn list-models
+  "Lists the model names available to the authenticated account.
+
+  Returns {:models [{:name string, :description string,
+  :release-date string} ...]}. Per-call options are :timeout-ms, :retry,
+  and :extra-headers."
+  ([client]
+   (list-models client {}))
+  ([client opts]
+   (let [{:keys [timeout-ms headers policy]} (operation-config client opts)
+         endpoint (str (:base-url client) "/v1/models")]
+     (execute-request
+       client endpoint :get nil timeout-ms headers policy
+       parse-models-success))))

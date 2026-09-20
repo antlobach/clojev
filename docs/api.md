@@ -179,6 +179,34 @@ Returns:
  :criteria ["Calm" "Frustrated" "Very angry"]}
 ```
 
+### `list-models`
+
+```clojure
+(clojev/list-models client)
+(clojev/list-models client opts)
+```
+
+Sends `GET /v1/models` and returns the models available to the authenticated account.
+
+Call options:
+
+| Key | Meaning |
+|---|---|
+| `:timeout-ms` | Replaces the attempt timeout for this call |
+| `:retry` | Merges with the client retry policy |
+| `:extra-headers` | Adds request headers for this call |
+
+Result:
+
+```clojure
+{:models
+ [{:name "jev-latest"
+   :description "The latest iteration of TypeSafe's System One Model: Jev"
+   :release-date "2026-09-10T18:38:01.391457+00:00"}]}
+```
+
+Each model contains the name accepted by the `:model` option, its description, and its release date.
+
 ### `system-one`
 
 ```clojure
@@ -222,6 +250,9 @@ CloJev sends requests to this path:
  :usage {:input-tokens 304
          :output-tokens 18}}
 ```
+
+When the API does not report a token count, the corresponding usage value is
+`nil`.
 
 #### Noul answer
 
@@ -377,6 +408,8 @@ Request map:
  :body "JSON text"
  :timeout-ms 10000}
 ```
+
+`:method` is `:post` for System One and `:get` for model listing. GET requests omit `:body`.
 
 Response map:
 

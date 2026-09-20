@@ -82,8 +82,9 @@
           (.setHeader builder name value))
         (.timeout builder (Duration/ofMillis timeout-ms))
         (case method
+          :get (.GET builder)
           :post (.POST builder (HttpRequest$BodyPublishers/ofString body))
-          (throw (ex-info "JDK transport supports only :post"
+          (throw (ex-info "JDK transport supports only :get and :post"
                           {:type :clojev/invalid-request :field :method})))
         (let [^HttpResponse response (.send ^HttpClient http-client
                                             (.build builder)
