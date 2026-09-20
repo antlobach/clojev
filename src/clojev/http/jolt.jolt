@@ -1,0 +1,92 @@
+(ns clojev.http.jolt
+  "Native Jolt backend for CloJev using jolt-lang/http-client."
+  (:require [clojure.string :as str]
+            [clojev.core :as clojev]
+            [clojev.transport :as transport]
+            [jolt.http-client :as http]))
+
+(defrecord JoltPlatform []
+  transport/Platform
+  (-now-ms [_]
+    (System/currentTimeMillis))
+  (-sleep-ms! [_ milliseconds]
+    (when (pos? milliseconds)
+      (Thread/sleep milliseconds)))
+  (-random-double [_]
+    (rand))
+  (-getenv [_ name]
+    (System/getenv name)))
+
+(defn platform
+  "Returns the standard Jolt platform implementation."
+  []
+  (->JoltPlatform))
+(defn- header-value [value]
+  (str (if (sequential? value) (first value) value)))
+
+(defn- normalize-headers [headers]
+  (into {}
+        (map (fn [[header-name value]]
+               [(str/lower-case
+                  (if (keyword? header-name)
+                    (clojure.core/name header-name)
+                    (str header-name)))
+                (header-value value)]))
+        headers))
+
+(defrecord JoltTransport []
+  transport/Transport
+  (-send! [_ {:keys [method url headers body timeout-ms]}]
+    (when-not (= :post method)
+      (throw (ex-info "Jolt transport supports only :post"
+                      {:type :clojev/invalid-request :field :method})))
+    (try
+      (let [response (http/request
+                       {:method method
+                        :url url
+                        :headers headers
+                        :body body
+                        :as :text
+                        :throw-exceptions false
+                        :conn-timeout timeout-ms
+                        :socket-timeout timeout-ms})]
+        {:status (:status response)
+         :headers (normalize-headers (:headers response))
+         :body (str (:body response))})
+      (catch java.net.SocketTimeoutException error
+        (throw (ex-info "HTTP request timed out"
+                        {:type :clojev/timeout :timeout-ms timeout-ms}
+                        error)))
+      (catch java.io.IOException error
+        (throw (ex-info "HTTP connection failed"
+                        {:type :clojev/connection-error}
+                        error)))
+      (catch Exception error
+        (throw (ex-info "HTTP transport failed"
+                        {:type :clojev/connection-error}
+                        error))))))
+
+(defn jolt-transport
+  "Creates the native Jolt HTTP transport."
+  []
+  (->JoltTransport))
+
+(defn client
+  "Creates a CloJev client for Jolt.
+
+  Uses jolt-lang/http-client by default. Pass :transport or :request-fn to use
+  another Jolt HTTP implementation with the normalized transport contract."
+  ([] (client {}))
+  ([opts]
+   (when (and (:transport opts) (:request-fn opts))
+     (throw (ex-info "Pass either :transport or :request-fn, not both"
+                     {:type :clojev/invalid-request :field :transport})))
+   (let [http-transport (or (:transport opts)
+                            (some-> (:request-fn opts)
+                                    transport/function-transport)
+                            (jolt-transport))
+         runtime (or (:platform opts) (platform))]
+     (clojev/client
+       (-> opts
+           (dissoc :request-fn)
+           (assoc :transport http-transport :platform runtime))))))

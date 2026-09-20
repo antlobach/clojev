@@ -1,0 +1,18 @@
+{:paths ["src"]
+ :jolt/min-version "0.8.9"
+ :deps {org.clojure/clojure {:mvn/version "1.12.4"}
+        org.clojure/data.json {:mvn/version "2.5.1"}}
+ :aliases
+ {:dev {:extra-deps {nrepl/nrepl {:mvn/version "1.3.1"}}
+        :main-opts ["-m" "nrepl.cmdline"]}
+  :jolt {:extra-deps
+         {io.github.jolt-lang/time
+          {:git/url "https://github.com/jolt-lang/time.git"
+           :git/sha "abeee49974c2c4efa2fa75c96d9a379822c6815f"}
+          jolt-lang/http-client
+          {:git/url "https://github.com/jolt-lang/http-client"
+           :git/sha "281689c9b6b54f3b09bb0fd3ca05dba4e54c6953"}}}
+  :test {:extra-paths ["test"]
+         :main-opts
+         ["-e"
+          "(require 'clojev.core-test) (let [r (clojure.test/run-tests 'clojev.core-test)] (when (pos? (+ (:fail r) (:error r))) (System/exit 1)))"]}}}

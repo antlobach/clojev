@@ -1,0 +1,6 @@
+.firecrawl/
+.cpcache/
+.nrepl-port
+.env
+.env.*
+!.env.example

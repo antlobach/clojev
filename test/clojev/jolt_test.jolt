@@ -1,0 +1,27 @@
+(ns clojev.jolt-test
+  (:require [clojure.test :refer [deftest is run-tests]]
+            [clojev.core :as clojev]
+            [clojev.http.jolt :as http]))
+
+(deftest evaluates-through-jolt-backend
+  (let [seen (promise)
+        client (http/client
+                 {:api-key "test-key"
+                  :request-fn
+                  (fn [request]
+                    (deliver seen request)
+                    {:status 200
+                     :headers {"content-type" "application/json"}
+                     :body
+                     "{\"model\":\"jev-1.13.0\",\"answers\":{\"ok\":{\"type\":\"noul\",\"noul\":0.97}},\"usage\":{\"input_tokens\":3,\"output_tokens\":1}}"})})
+        result (clojev/system-one
+                 client "state" {:ok (clojev/noul "OK?")})]
+    (is (= :post (:method @seen)))
+    (is (= 0.97 (get-in result [:answers :ok :noul])))
+    (is (= {:input-tokens 3 :output-tokens 1}
+           (:usage result)))))
+
+(defn -main [& _]
+  (let [{:keys [fail error]} (run-tests 'clojev.jolt-test)]
+    (when (pos? (+ fail error))
+      (System/exit 1))))
