@@ -1,5 +1,9 @@
 # CloJev
 
+<p align="center">
+  <img src="assets/clojev-logo.webp" alt="CloJev octopus logo" width="760">
+</p>
+
 [![Clojure JVM](https://github.com/antlobach/clojev/actions/workflows/jvm-tests.yml/badge.svg?branch=main)](https://github.com/antlobach/clojev/actions/workflows/jvm-tests.yml)
 [![Jolt](https://github.com/antlobach/clojev/actions/workflows/jolt-tests.yml/badge.svg?branch=main)](https://github.com/antlobach/clojev/actions/workflows/jolt-tests.yml)
 [![DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/antlobach/clojev/1.2-project-layout-and-licensing)
