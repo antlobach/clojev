@@ -1,5 +1,9 @@
 # CloJev
 
+[![Tests](https://github.com/antlobach/clojev/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/antlobach/clojev/actions/workflows/ci.yml)
+[![DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/antlobach/clojev/1.2-project-layout-and-licensing)
+[![License](https://img.shields.io/github/license/antlobach/clojev)](LICENSE)
+
 CloJev is an independent Clojure SDK for the TypeSafe System One API.
 
 > **Unofficial project:** TypeSafe does not develop, sponsor, endorse, or support CloJev. This project uses the names TypeSafe, Jev, and System One only to identify the compatible API.
