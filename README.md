@@ -1,6 +1,7 @@
 # CloJev
 
-[![Tests](https://github.com/antlobach/clojev/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/antlobach/clojev/actions/workflows/ci.yml)
+[![Clojure JVM](https://github.com/antlobach/clojev/actions/workflows/jvm-tests.yml/badge.svg?branch=main)](https://github.com/antlobach/clojev/actions/workflows/jvm-tests.yml)
+[![Jolt](https://github.com/antlobach/clojev/actions/workflows/jolt-tests.yml/badge.svg?branch=main)](https://github.com/antlobach/clojev/actions/workflows/jolt-tests.yml)
 [![DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/antlobach/clojev/1.2-project-layout-and-licensing)
 [![License](https://img.shields.io/github/license/antlobach/clojev)](LICENSE)
 
@@ -406,7 +407,7 @@ gh secret set TYPESAFE_API_KEY
 gh workflow run live-smoke.yml
 ```
 
-The normal CI workflow does not use the live API or require an API key.
+The normal CI workflows do not use the live API or require an API key.
 
 ## License
 
